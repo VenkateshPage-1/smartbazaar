@@ -1,7 +1,11 @@
 {
   "version": 2,
   "buildCommand": "npm install && npx prisma generate",
-  "outputDirectory": ".",
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 30
+    }
+  },
   "rewrites": [
     { "source": "/(.*)", "destination": "/api" }
   ]
