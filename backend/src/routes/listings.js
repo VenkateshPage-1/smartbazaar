@@ -31,7 +31,7 @@ export default async function listingRoutes(app) {
     if (category) where.category = category;
     if (city) where.city = city;
     if (shopIds) where.shopId = { in: shopIds.split(',') };
-    if (q) where.OR = [{ title: { contains: q } }, { description: { contains: q } }];
+    if (q) where.OR = [{ title: { contains: q, mode: 'insensitive' } }, { description: { contains: q, mode: 'insensitive' } }];
 
     let items = await prisma.listing.findMany({
       where,
