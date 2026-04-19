@@ -1,15 +1,36 @@
-import { prisma } from '../db.js';
+import { supabase } from '../supabase.js';
 import { html, esc, formatPrice } from './template.js';
 
 export default async function webRoutes(app) {
 
   // Home — list all shops
   app.get('/w', async (req, reply) => {
-    const shops = await prisma.shop.findMany({
-      where: { active: true },
-      include: { _count: { select: { listings: { where: { status: 'active' } } } } },
-      orderBy: { createdAt: 'desc' },
-    });
+    const { data: shops, error } = await supabase
+      .from('Shop')
+      .select('*')
+      .eq('active', true)
+      .order('createdAt', { ascending: false });
+
+    if (error) {
+      req.log.error(error);
+      return reply.code(500).send({ error: 'db error', detail: error.message });
+    }
+
+    // get listing counts per shop
+    const shopIds = shops.map(s => s.id);
+    let countMap = {};
+    if (shopIds.length > 0) {
+      const { data: counts } = await supabase
+        .from('Listing')
+        .select('shopId')
+        .in('shopId', shopIds)
+        .eq('status', 'active');
+      if (counts) {
+        for (const c of counts) {
+          countMap[c.shopId] = (countMap[c.shopId] || 0) + 1;
+        }
+      }
+    }
 
     const body = `
       <div class="header">
@@ -29,7 +50,7 @@ export default async function webRoutes(app) {
             <div class="store-meta">
               <span>${esc(s.category)}</span>
               ${s.city ? `<span>${esc(s.city)}</span>` : ''}
-              <span class="store-items">${s._count.listings} items</span>
+              <span class="store-items">${countMap[s.id] || 0} items</span>
               ${s.deliveryKm > 0 ? `<span>Delivers ${s.deliveryKm} km</span>` : ''}
             </div>
           </a>
@@ -48,17 +69,22 @@ export default async function webRoutes(app) {
 
   // Shop catalogue page
   app.get('/w/shop/:id', async (req, reply) => {
-    const shop = await prisma.shop.findUnique({
-      where: { id: req.params.id },
-      include: { owner: { select: { name: true, trustScore: true, verified: true } } },
-    });
+    const { data: shop } = await supabase
+      .from('Shop')
+      .select('*, User!ownerId(name, trustScore, verified)')
+      .eq('id', req.params.id)
+      .single();
+
     if (!shop) return reply.code(404).type('text/html').send(html('Not Found', 'Not Found', '', null, '<div class="empty">Shop not found.</div>'));
 
-    const items = await prisma.listing.findMany({
-      where: { shopId: shop.id, status: 'active' },
-      orderBy: { createdAt: 'desc' },
-    });
-    const parsedItems = items.map((l) => ({ ...l, images: JSON.parse(l.images || '[]') }));
+    const { data: items } = await supabase
+      .from('Listing')
+      .select('*')
+      .eq('shopId', shop.id)
+      .eq('status', 'active')
+      .order('createdAt', { ascending: false });
+
+    const parsedItems = (items || []).map((l) => ({ ...l, images: JSON.parse(l.images || '[]') }));
 
     const waPhone = shop.phone.startsWith('+') ? shop.phone.replace(/\D/g, '') : `91${shop.phone.replace(/\D/g, '')}`;
     const waMsg = encodeURIComponent(`Hi, I saw your shop "${shop.name}" on SmartBazaar. I'd like to order.`);
@@ -109,18 +135,25 @@ export default async function webRoutes(app) {
 
   // Listing detail page
   app.get('/w/listing/:id', async (req, reply) => {
-    const listing = await prisma.listing.findUnique({
-      where: { id: req.params.id },
-      include: { seller: { select: { id: true, name: true, phone: true, trustScore: true, verified: true } } },
-    });
+    const { data: listing } = await supabase
+      .from('Listing')
+      .select('*, User!sellerId(id, name, phone, trustScore, verified)')
+      .eq('id', req.params.id)
+      .single();
+
     if (!listing) return reply.code(404).type('text/html').send(html('Not Found', 'Not Found', '', null, '<div class="empty">Listing not found.</div>'));
 
     const images = JSON.parse(listing.images || '[]');
-    const sellerPhone = listing.seller?.phone || '';
+    const seller = listing.User || {};
+    const sellerPhone = seller.phone || '';
     const waPhone = sellerPhone.startsWith('+') ? sellerPhone.replace(/\D/g, '') : `91${sellerPhone.replace(/\D/g, '')}`;
     const waMsg = encodeURIComponent(`Hi, I'm interested in "${listing.title}" listed at ₹${listing.price} on SmartBazaar.`);
 
-    const shop = listing.shopId ? await prisma.shop.findUnique({ where: { id: listing.shopId } }) : null;
+    let shop = null;
+    if (listing.shopId) {
+      const { data } = await supabase.from('Shop').select('*').eq('id', listing.shopId).single();
+      shop = data;
+    }
 
     const body = `
       <div class="header">
@@ -141,10 +174,10 @@ export default async function webRoutes(app) {
         </div>
         ${listing.description ? `<div class="listing-desc">${esc(listing.description)}</div>` : ''}
         <div class="card seller-card" style="margin-top:16px">
-          <div class="seller-avatar">${(listing.seller?.name || 'S').charAt(0).toUpperCase()}</div>
+          <div class="seller-avatar">${(seller.name || 'S').charAt(0).toUpperCase()}</div>
           <div>
-            <div class="seller-name">${esc(listing.seller?.name || 'Seller')}</div>
-            <div class="seller-trust">Trust ${listing.seller?.trustScore || 50}/100${listing.seller?.verified ? ' · Verified' : ''}</div>
+            <div class="seller-name">${esc(seller.name || 'Seller')}</div>
+            <div class="seller-trust">Trust ${seller.trustScore || 50}/100${seller.verified ? ' · Verified' : ''}</div>
           </div>
         </div>
         <a href="https://wa.me/${waPhone}?text=${waMsg}" class="wa-btn" target="_blank">Chat on WhatsApp</a>
