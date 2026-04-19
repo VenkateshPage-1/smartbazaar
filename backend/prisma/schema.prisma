@@ -1,0 +1,126 @@
+// Swap provider to "postgresql" and update DATABASE_URL to migrate to Supabase.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String    @id @default(cuid())
+  phone        String    @unique
+  name         String?
+  avatarUrl    String?
+  trustScore   Int       @default(50)
+  verified     Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  listings     Listing[]
+  sentMsgs     Message[] @relation("from")
+  receivedMsgs Message[] @relation("to")
+  wants        Want[]
+  dealsSelling Deal[]    @relation("dealsSelling")
+  dealsBuying  Deal[]    @relation("dealsBuying")
+  shop         Shop?
+}
+
+model Listing {
+  id          String    @id @default(cuid())
+  sellerId    String
+  seller      User      @relation(fields: [sellerId], references: [id])
+  title       String
+  description String
+  category    String
+  price       Int
+  currency    String    @default("INR")
+  condition   String    @default("used")
+  images      String    // JSON array of URLs
+  lat         Float?
+  lng         Float?
+  city        String?
+  status      String    @default("active") // active | sold | draft
+  aiGenerated Boolean   @default(false)
+  stock       Int?      // null = one-off listing, number = shop inventory
+  shopId      String?
+  shop        Shop?     @relation(fields: [shopId], references: [id])
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  messages    Message[]
+  deals       Deal[]
+
+  @@index([category, status])
+  @@index([city, status])
+}
+
+// Reverse marketplace: buyer posts what they want, sellers get matched.
+model Want {
+  id        String   @id @default(cuid())
+  buyerId   String
+  buyer     User     @relation(fields: [buyerId], references: [id])
+  query     String
+  maxPrice  Int?
+  category  String?
+  city      String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  listingId String
+  listing   Listing  @relation(fields: [listingId], references: [id])
+  fromId    String
+  from      User     @relation("from", fields: [fromId], references: [id])
+  toId      String
+  to        User     @relation("to", fields: [toId], references: [id])
+  body      String
+  createdAt DateTime @default(now())
+
+  @@index([listingId, createdAt])
+}
+
+model Shop {
+  id           String    @id @default(cuid())
+  ownerId      String    @unique
+  owner        User      @relation(fields: [ownerId], references: [id])
+  name         String
+  description  String    @default("")
+  category     String    @default("general") // general | electronics | farm | grocery
+  phone        String    // WhatsApp number for orders
+  address      String    @default("")
+  city         String?
+  lat          Float?
+  lng          Float?
+  deliveryKm   Int       @default(5) // delivery radius in km
+  deliveryNote String    @default("") // "Free delivery within 5 km"
+  logo         String?   // image URL
+  verified     Boolean   @default(false)
+  active       Boolean   @default(true)
+  listings     Listing[]
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+// Deal = agreed price after negotiation. Escrow payment attached.
+model Deal {
+  id          String   @id @default(cuid())
+  listingId   String
+  listing     Listing  @relation(fields: [listingId], references: [id])
+  sellerId    String
+  seller      User     @relation("dealsSelling", fields: [sellerId], references: [id])
+  buyerId     String
+  buyer       User     @relation("dealsBuying", fields: [buyerId], references: [id])
+  agreedPrice Int
+  status      String   @default("requested") // requested | paid | delivered | confirmed | disputed | refunded
+  paymentId   String?  // Razorpay payment ID
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// Dev-only OTP store. Replace with MSG91/Twilio in production.
+model OtpCode {
+  phone     String   @id
+  code      String
+  expiresAt DateTime
+}
